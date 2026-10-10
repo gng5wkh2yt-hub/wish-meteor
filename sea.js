@@ -142,10 +142,10 @@ window.WM = window.WM || {};
       const isMine = s.uid === myUid;
       const isHit = highlightUid && s.uid === highlightUid;   // 搜索命中的那个用户
       // 半径写成"屏幕像素 ÷ 缩放"：无论放大缩小，星星在屏幕上大小恒定
-      const r = (isMine ? 5.2 : isHit ? 4.4 : 2.4) / cam.k;
+      const r = (isMine ? 5.8 : isHit ? 4.8 : 2.9) / cam.k;
 
-      // 光晕
-      const glowR = r * (isMine ? 5 : isHit ? 4.6 : 3.4);
+      // 光晕收紧一点，铺太开整颗星看着就是糊的
+      const glowR = r * (isMine ? 3.6 : isHit ? 3.4 : 2.4);
       const gg = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, glowR);
       if (isMine) {
         gg.addColorStop(0, 'rgba(255,228,150,0.95)');
@@ -171,18 +171,25 @@ window.WM = window.WM || {};
       const drawLabel = s.text && (isMine ? mineLabels++ < 40 : (showLabels || isHit));
       if (drawLabel) {
         ctx.globalCompositeOperation = 'source-over';
-        ctx.font = `${fs}px "Songti SC","STSong","SimSun",serif`;
+        // 星海是数据展示，用无衬线 —— 宋体在这个字号下笔画太细，看着发灰
+        ctx.font = `500 ${fs}px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",-apple-system,sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
+        // shadowBlur 是设备像素、不受 canvas 变换影响 —— 千万不能除以 cam.k，
+        // 否则缩小几百倍时阴影半径也放大几百倍，字就糊成一团光了
         if (isMine) {
-          ctx.shadowColor = 'rgba(255,214,140,0.9)';
-          ctx.shadowBlur = 12 / cam.k;
-          ctx.fillStyle = 'rgba(255,246,220,0.98)';
+          ctx.shadowColor = 'rgba(255,214,140,0.85)';
+          ctx.shadowBlur = 9;
+          ctx.fillStyle = 'rgba(255,248,228,1)';
+        } else if (isHit) {
+          ctx.shadowColor = 'rgba(120,240,255,0.8)';
+          ctx.shadowBlur = 8;
+          ctx.fillStyle = 'rgba(226,255,252,0.96)';
         } else {
-          // 深色阴影压住背景，避免文字糊在星云上看不清
-          ctx.shadowColor = 'rgba(0,0,0,0.85)';
-          ctx.shadowBlur = 6 / cam.k;
-          ctx.fillStyle = 'rgba(214,228,255,0.78)';
+          // 深色描边压住背景，比高斯阴影更锐利、更清楚
+          ctx.shadowColor = 'rgba(0,0,0,0.9)';
+          ctx.shadowBlur = 4;
+          ctx.fillStyle = 'rgba(222,234,255,0.86)';
         }
         ctx.fillText(s.text, s.x, s.y + r + 11 / cam.k);
         ctx.shadowBlur = 0;
