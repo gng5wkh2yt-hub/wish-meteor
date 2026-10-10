@@ -1,0 +1,21 @@
+name = "wish-meteor-api"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# 绑自有域名。workers.dev 在大陆被 DNS 污染 + SNI 阻断，必须走自定义域名。
+# 实测取舍（2026-10-11）：Worker 0.4s 且稳定；本机 + Tunnel 0.5~1.8s 抖动。
+# 采用 Worker —— 不依赖本机开机，延迟也更低。
+routes = [
+  { pattern = "api.huiliyi.site", custom_domain = true }
+]
+
+# D1 数据库 —— 建在 APAC 区域，离国内比默认的美西近得多
+[[d1_databases]]
+binding = "DB"
+database_name = "wish-meteor"
+database_id = "93363d6d-cd59-4adf-afae-e5c83e675987"
+
+# R2 头像桶（Phase 2 用；若无法开通则降级为 D1 BLOB）
+# [[r2_buckets]]
+# binding = "AVATARS"
+# bucket_name = "wish-meteor-avatars"

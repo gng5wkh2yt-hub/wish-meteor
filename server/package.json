@@ -1,0 +1,14 @@
+{
+  "name": "wish-meteor-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "愿海后端 —— 跑在本机，经 Cloudflare Tunnel 对外",
+  "scripts": {
+    "start": "node --experimental-sqlite src/index.js",
+    "dev": "node --experimental-sqlite --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
