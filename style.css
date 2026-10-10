@@ -632,3 +632,38 @@ input{-webkit-user-select:text;user-select:text}
   .harbor{padding:12px 8px}
   .hb-text{font-size:11px}
 }
+
+/* ---- 愿望气泡里的"汇入星海"键 ---- */
+.wb-send{
+  position:absolute;top:50%;right:42px;
+  transform:translateY(-50%);
+  z-index:2;
+  width:26px;height:26px;border-radius:50%;
+  display:grid;place-items:center;
+  border:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.06);
+  cursor:pointer;opacity:0;
+  transition:opacity .3s,background .3s,border-color .3s,transform .25s;
+}
+.wb-send::after{
+  content:'';width:9px;height:9px;border-radius:50%;
+  border:1.5px solid rgba(208,224,255,.62);
+  transition:background .25s,border-color .25s,box-shadow .25s;
+}
+.wb-send:hover{background:rgba(255,255,255,.12);transform:translateY(-50%) scale(1.08)}
+.wb-send:active{transform:translateY(-50%) scale(.94)}
+/* 已汇入：金色实心 */
+.wb-send.on{
+  border-color:rgba(255,226,168,.5);
+  background:rgba(255,200,120,.14);
+}
+.wb-send.on::after{
+  background:#ffd88a;border-color:#ffd88a;
+  box-shadow:0 0 10px rgba(255,214,140,.8);
+}
+.wb-send.busy{opacity:.45;cursor:default}
+.stack.open .wb-send{opacity:1}
+.wish-bubble:hover .wb-send{opacity:1}
+@media (hover:none){
+  .stack.open .wb-send{opacity:.92}
+}

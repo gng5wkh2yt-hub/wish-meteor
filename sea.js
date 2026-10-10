@@ -31,6 +31,7 @@ window.WM = window.WM || {};
   let stars = [];
   let myUid = null;
   let lastShown = 0;
+  let highlightUid = null;         // 搜索命中的用户，星会变青
 
   /* ---------------- 数据 ----------------
      坐标由服务端在写入时定好（Halton 低差异序列，均匀铺开），前端只做只读消费。
@@ -139,16 +140,21 @@ window.WM = window.WM || {};
 
     for (const s of shown) {
       const isMine = s.uid === myUid;
+      const isHit = highlightUid && s.uid === highlightUid;   // 搜索命中的那个用户
       // 半径写成"屏幕像素 ÷ 缩放"：无论放大缩小，星星在屏幕上大小恒定
-      const r = (isMine ? 5.2 : 2.4) / cam.k;
+      const r = (isMine ? 5.2 : isHit ? 4.4 : 2.4) / cam.k;
 
       // 光晕
-      const glowR = r * (isMine ? 5 : 3.4);
+      const glowR = r * (isMine ? 5 : isHit ? 4.6 : 3.4);
       const gg = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, glowR);
       if (isMine) {
         gg.addColorStop(0, 'rgba(255,228,150,0.95)');
         gg.addColorStop(0.35, 'rgba(255,196,110,0.35)');
         gg.addColorStop(1, 'rgba(255,190,100,0)');
+      } else if (isHit) {
+        gg.addColorStop(0, 'rgba(160,255,235,0.95)');
+        gg.addColorStop(0.35, 'rgba(90,220,255,0.32)');
+        gg.addColorStop(1, 'rgba(90,200,255,0)');
       } else {
         gg.addColorStop(0, 'rgba(214,230,255,0.6)');
         gg.addColorStop(0.4, 'rgba(180,205,255,0.16)');
@@ -158,11 +164,11 @@ window.WM = window.WM || {};
       ctx.beginPath(); ctx.arc(s.x, s.y, glowR, 0, 6.2832); ctx.fill();
 
       // 星核
-      ctx.fillStyle = isMine ? '#fff7e0' : '#e6eeff';
+      ctx.fillStyle = isMine ? '#fff7e0' : isHit ? '#dcfffa' : '#e6eeff';
       ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, 6.2832); ctx.fill();
 
       // 文字
-      const drawLabel = s.text && (isMine ? mineLabels++ < 40 : showLabels);
+      const drawLabel = s.text && (isMine ? mineLabels++ < 40 : (showLabels || isHit));
       if (drawLabel) {
         ctx.globalCompositeOperation = 'source-over';
         ctx.font = `${fs}px "Songti SC","STSong","SimSun",serif`;
@@ -208,6 +214,7 @@ window.WM = window.WM || {};
   }
 
   cvs.addEventListener('pointerdown', e => {
+    cancelFly();
     cvs.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -270,6 +277,7 @@ window.WM = window.WM || {};
   // 滚轮缩放（锚定光标）
   cvs.addEventListener('wheel', e => {
     e.preventDefault();
+    cancelFly();
     zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0016));
   }, { passive: false });
 
@@ -287,10 +295,25 @@ window.WM = window.WM || {};
     draw();
   }
 
-  /* ---------------- 惯性 ---------------- */
+  /* ---------------- 惯性 + 飞行 ---------------- */
+  let tween = null;
+
   function tick() {
     requestAnimationFrame(tick);
     if (!active) return;
+
+    // 相机飞行（搜索跳转用）—— 任何用户输入都该立刻打断它
+    if (tween) {
+      const p = Math.min(1, (performance.now() - tween.t0) / tween.dur);
+      const e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;  // easeInOutCubic
+      cam.x = tween.fx + (tween.tx - tween.fx) * e;
+      cam.y = tween.fy + (tween.ty - tween.fy) * e;
+      cam.k = tween.fk + (tween.tk - tween.fk) * e;
+      if (p >= 1) tween = null;
+      draw();
+      return;
+    }
+
     if (Math.abs(vx) > 0.05 || Math.abs(vy) > 0.05) {
       cam.x += vx; cam.y += vy;
       vx *= 0.93; vy *= 0.93;
@@ -300,6 +323,16 @@ window.WM = window.WM || {};
       vx = vy = 0;
     }
   }
+
+  function flyTo(tx, ty, tk, dur = 760) {
+    tween = {
+      fx: cam.x, fy: cam.y, fk: cam.k,
+      tx, ty, tk: clamp(tk || cam.k, K_MIN, K_MAX),
+      t0: performance.now(), dur,
+    };
+  }
+  // 用户一动就取消飞行，别跟手感打架
+  function cancelFly() { tween = null; }
 
   /* ---------------- 页面切换 ---------------- */
   function onScroll() {
@@ -321,7 +354,56 @@ window.WM = window.WM || {};
   }
 
 
-  /* ---------------- 切页入口：桌面鼠标用户没有横滑手势 ----------------
+  /* ---------------- 搜索：按用户名飞到那个人的星旁 ---------------- */
+  const searchInput = document.getElementById('seaSearch');
+  const searchBtn = document.getElementById('seaSearchBtn');
+  let toastTimer = null;
+
+  function toast(msg) {
+    if (!hintEl) return;
+    hintEl.textContent = msg;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => updateHint(lastShown), 2600);
+  }
+
+  function doSearch() {
+    const q = (searchInput && searchInput.value || '').trim();
+    if (!q) return;
+
+    // 先判自己：你可能还没往星海里放过星，那样会误报"没找到"
+    if (WM.auth && WM.auth.me && WM.auth.me.name.toLowerCase() === q.toLowerCase()) {
+      toast('这是你自己的星星呀');
+      return;
+    }
+
+    const hits = stars.filter(s => s.name && s.name.toLowerCase() === q.toLowerCase());
+    if (!hits.length) { toast('星海里没有找到「' + q + '」'); return; }
+    if (myUid && hits[0].uid === myUid) { toast('这是你自己的星星呀'); return; }
+
+    highlightUid = hits[0].uid;
+
+    // 缩放到刚好能装下这个人的所有星 —— 否则飞过去只看得到一两颗，等于没找到
+    const xs = hits.map(s => s.x), ys = hits.map(s => s.y);
+    const minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+    const minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+    const spreadX = Math.max(maxX - minX, 900);
+    const spreadY = Math.max(maxY - minY, 900);
+    const kFit = Math.min(W / spreadX, H / spreadY) * 0.62;
+
+    flyTo((minX + maxX) / 2, (minY + maxY) / 2, clamp(kFit, K_MIN, K_MAX));
+    toast('找到了 ' + hits[0].name + ' 的 ' + hits.length + ' 颗星');
+  }
+
+  if (searchBtn) searchBtn.addEventListener('click', doSearch);
+  if (searchInput) {
+    searchInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
+    });
+    // 一改动输入就清掉上一次的命中高亮
+    searchInput.addEventListener('input', () => { highlightUid = null; });
+  }
+
+  /* ---------------- 切页入口：桌面鼠标没有横滑手势 ----------------
      触摸板双指横滑是原生滚动；鼠标用户靠点圆点和方向键。 */
   function goTo(index) {
     pager.scrollTo({ left: pager.clientWidth * index, behavior: 'smooth' });

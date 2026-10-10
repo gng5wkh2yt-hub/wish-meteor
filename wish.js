@@ -107,14 +107,20 @@ function renderStack(newId) {
     <div class="wish-bubble${w.id === newId ? ' new' : ''}" data-id="${w.id}">
       <div class="wb-text"></div>
       <div class="wb-time">${fmtTime(w.ts)}</div>
+      <button class="wb-send" type="button" aria-label="汇入星海"></button>
       <button class="wb-del" type="button" aria-label="删除这个愿望">✕</button>
     </div>
   `).join('');
 
   // 文字用 textContent 写入，避免任何注入
   const nodes = stackBody.querySelectorAll('.wish-bubble');
+  const synced = getSynced();
   list.forEach((w, i) => {
     nodes[i].querySelector('.wb-text').textContent = w.text;
+    const sb = nodes[i].querySelector('.wb-send');
+    const on = !!synced[w.id];
+    sb.classList.toggle('on', on);
+    sb.title = on ? '已汇入星海，点击撤下' : '汇入星海';
   });
 }
 
@@ -130,6 +136,53 @@ function addWish(text) {
   stackOpen = false;
   renderStack(w.id);
   return w;
+}
+
+/* ---------------- 星海同步 ----------------
+   记下每条愿望对应的服务端 id。默认不自动上传 —— 由用户在列表里逐条决定。 */
+const SYNC_KEY = 'wish-meteor:synced:v1';
+
+function getSynced() {
+  try { return JSON.parse(localStorage.getItem(SYNC_KEY) || '{}') || {}; }
+  catch (e) { return {}; }
+}
+function saveSynced(map) {
+  try { localStorage.setItem(SYNC_KEY, JSON.stringify(map)); } catch (e) {}
+}
+
+async function toggleSync(clientId) {
+  const w = wishes.find(x => x.id === clientId);
+  if (!w) return;
+
+  // 没登录就先引导注册 —— 星海要先有身份
+  if (!WM.api || !WM.api.loggedIn) {
+    if (WM.auth) WM.auth.openModal('register');
+    return;
+  }
+
+  const synced = getSynced();
+  const el = stackBody.querySelector('.wish-bubble[data-id="' + clientId + '"] .wb-send');
+  if (el) el.classList.add('busy');
+
+  try {
+    if (synced[clientId]) {
+      await WM.api.request('/api/wishes/' + synced[clientId], { method: 'DELETE', auth: true });
+      delete synced[clientId];
+    } else {
+      const res = await WM.api.request('/api/wishes', {
+        method: 'POST',
+        auth: true,
+        body: { id: w.id, text: w.text, ts: w.ts },
+      });
+      const got = res.wishes && res.wishes[0];
+      if (got) synced[clientId] = got.id;
+    }
+    saveSynced(synced);
+    renderStack(null);
+    window.dispatchEvent(new CustomEvent('wm:wishes-changed'));
+  } catch (e) {
+    if (el) { el.classList.remove('busy'); el.title = '同步失败，再试一次'; }
+  }
 }
 
 function removeWish(id) {
@@ -150,6 +203,12 @@ stackBody.addEventListener('click', e => {
   if (del) {
     e.stopPropagation();
     removeWish(del.closest('.wish-bubble').dataset.id);
+    return;
+  }
+  const send = e.target.closest('.wb-send');
+  if (send) {
+    e.stopPropagation();
+    toggleSync(send.closest('.wish-bubble').dataset.id);
   }
 });
 
