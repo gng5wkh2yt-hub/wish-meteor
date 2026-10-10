@@ -232,7 +232,10 @@ window.WM = window.WM || {};
 
   cvs.addEventListener('pointerdown', e => {
     cancelFly();
-    cvs.setPointerCapture(e.pointerId);
+    // setPointerCapture 在部分浏览器/部分 pointerId 下会抛错 ——
+    // 不包 try 的话整个处理函数中断，指针就永远凑不齐，双指缩放直接失效
+    try { cvs.setPointerCapture(e.pointerId); } catch (err) { /* 忽略 */ }
+
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
     if (pointers.size === 1) {
