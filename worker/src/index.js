@@ -77,6 +77,28 @@ function randomId(prefix) {
   return prefix + [...b].map(x => x.toString(36)).join('').slice(0, 12);
 }
 
+/* ---------------- 星星坐标：Halton 低差异序列 ----------------
+   真随机会出现肉眼可见的聚集和空洞；Halton 按序号铺点，视觉上均匀得多，
+   而且坐标只跟 rowid 有关 —— 删掉几颗星，其余的一颗都不会挪位。 */
+function halton(index, base) {
+  let f = 1, r = 0, i = index;
+  while (i > 0) { f /= base; r += f * (i % base); i = Math.floor(i / base); }
+  return r;
+}
+
+// 给还没有坐标的愿望补上（-1 是"待分配"标记）
+async function assignCoords(env) {
+  const rows = await env.DB.prepare(
+    'SELECT rowid AS rid, id FROM wishes WHERE x < 0 OR y < 0'
+  ).all();
+  const list = rows.results || [];
+  if (!list.length) return;
+  // 留 4% 边距，别贴着世界边界
+  const stmts = list.map(r => env.DB.prepare('UPDATE wishes SET x = ?, y = ? WHERE id = ?')
+    .bind(0.04 + halton(r.rid, 2) * 0.92, 0.04 + halton(r.rid, 3) * 0.92, r.id));
+  await env.DB.batch(stmts);
+}
+
 /* ============================ token ============================ */
 async function signToken(uid, secret) {
   const payload = b64urlEncode(JSON.stringify({ uid, exp: Date.now() + TOKEN_TTL }));
@@ -241,6 +263,90 @@ export default {
         const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM wishes WHERE user_id = ?')
           .bind(me.id).first();
         return json({ user: publicUser(me), wishCount: c?.n ?? 0 }, 200, origin);
+      }
+
+      /* ---------- 上传愿望（单条 / 批量） ---------- */
+      if ((path === '/api/wishes' || path === '/api/wishes/bulk') && request.method === 'POST') {
+        const me = await authUser(request, env);
+        if (!me) return json({ error: 'unauthorized' }, 401, origin);
+
+        const body = await request.json().catch(() => null);
+        const list = path.endsWith('/bulk')
+          ? (Array.isArray(body?.wishes) ? body.wishes.slice(0, 200) : [])
+          : (body && body.text ? [body] : []);
+        if (!list.length) return json({ error: '没有可上传的愿望' }, 400, origin);
+
+        const now = Date.now();
+        const out = [];
+        const stmts = [];
+
+        for (const w of list) {
+          const text = typeof w?.text === 'string' ? w.text.trim().slice(0, 24) : '';
+          if (!text) continue;
+
+          // 客户端本地 id → 服务端 id：同一愿望重复上传不会产生重复记录
+          const clientId = String(w.id || text + ':' + (w.ts || 0));
+          const raw = await hmacHex(env.PEPPER, me.id + ':' + clientId);
+          const id = 'w' + raw.slice(0, 16);
+
+          // 时间戳取客户端原始值，但不接受未来或太离谱的值
+          let ts = Number(w.ts) || now;
+          if (!(ts > 946684800000 && ts <= now + 86400000)) ts = now;
+
+          stmts.push(env.DB.prepare(
+            'INSERT OR IGNORE INTO wishes (id, user_id, text, ts, x, y, created_at) VALUES (?, ?, ?, ?, -1, -1, ?)'
+          ).bind(id, me.id, text, ts, now));
+          out.push({ clientId, id });
+        }
+
+        // 逐条 run 是 N 次网络往返，几十条就会超时；batch 一次最多 50 条，分批跑
+        let inserted = 0;
+        for (let i = 0; i < stmts.length; i += 45) {
+          const rs = await env.DB.batch(stmts.slice(i, i + 45));
+          inserted += rs.reduce((n, r) => n + ((r.meta && r.meta.changes) || 0), 0);
+        }
+
+        // 坐标按 rowid 走 Halton 低差异序列 —— 视觉上均匀，且删星不会让其他星挪位
+        await assignCoords(env);
+
+        return json({ inserted, skipped: out.length - inserted, wishes: out }, 200, origin);
+      }
+
+      /* ---------- 删除愿望 ---------- */
+      if (path.startsWith('/api/wishes/') && request.method === 'DELETE') {
+        const me = await authUser(request, env);
+        if (!me) return json({ error: 'unauthorized' }, 401, origin);
+        const id = path.slice('/api/wishes/'.length);
+        await env.DB.prepare('DELETE FROM wishes WHERE id = ? AND user_id = ?')
+          .bind(id, me.id).run();
+        return json({ ok: true }, 200, origin);
+      }
+
+      /* ---------- 拉取星海（公开，不看登录也能看） ---------- */
+      if (path === '/api/sea' && request.method === 'GET') {
+        const limit = Math.min(Number(url.searchParams.get('limit')) || 800, 2000);
+        const rows = await env.DB.prepare(
+          `SELECT w.id, w.text, w.ts, w.x, w.y, u.id AS uid, u.name, u.avatar_key, u.avatar_ver
+           FROM wishes w JOIN users u ON u.id = w.user_id
+           ORDER BY w.ts DESC LIMIT ?`
+        ).bind(limit).all();
+
+        const me = await authUser(request, env).catch(() => null);
+
+        return json({
+          total: rows.results?.length || 0,
+          mine: me ? me.id : null,
+          wishes: (rows.results || []).map(r => ({
+            id: r.id,
+            text: r.text,
+            ts: r.ts,
+            x: r.x,
+            y: r.y,
+            uid: r.uid,
+            name: r.name,
+            avatarUrl: r.avatar_key ? `/av/${r.avatar_key}` : null,
+          })),
+        }, 200, origin);
       }
 
       /* ---------- 头像上传 ---------- */

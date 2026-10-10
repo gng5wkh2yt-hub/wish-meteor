@@ -26,7 +26,7 @@ window.WM = window.WM || {};
   }
 
   /* ---------------- 请求 ---------------- */
-  async function request(path, { method = 'GET', body, auth = false, timeout = 12000 } = {}) {
+  async function request(path, { method = 'GET', body, auth = false, timeout = 25000 } = {}) {
     const headers = { 'Content-Type': 'application/json' };
     if (auth && token) headers['Authorization'] = 'Bearer ' + token;
 

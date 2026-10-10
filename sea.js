@@ -1,7 +1,8 @@
 /* ============================================================
    愿海 · 星海（第二屏）
    每颗星 = 一条愿望。自己的星永远最亮，且豁免渲染上限。
-   Phase 1：先用种子数据跑通渲染与手势，Phase 3 再接真实数据。
+   数据全部来自后端 /api/sea，不放假数据。
+   坐标由服务端写入时用 Halton 低差异序列定好，前端只做只读消费。
    ============================================================ */
 window.WM = window.WM || {};
 
@@ -31,50 +32,47 @@ window.WM = window.WM || {};
   let myUid = null;
   let lastShown = 0;
 
-  /* ---------------- 稳定哈希：同一个 id 永远落在同一处 ---------------- */
-  function hash32(str, seed) {
-    let h = (seed >>> 0) || 2166136261;
-    for (let i = 0; i < str.length; i++) {
-      h ^= str.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    return h >>> 0;
-  }
-  // FNV 对 'u0'/'u1' 这类相似输入雪崩不足，再走一遍 murmur3 finalizer 打散
-  function r01(str, salt) {
-    let h = hash32(str + '#' + salt);
-    h ^= h >>> 16; h = Math.imul(h, 2246822507);
-    h ^= h >>> 13; h = Math.imul(h, 3266489909);
-    h ^= h >>> 16;
-    return (h >>> 0) / 4294967296;
-  }
-
-  // 用户主星：决定这一簇星分布在世界的哪里
-  function homeOf(uid) {
-    return { x: r01(uid, 'hx') * WORLD, y: r01(uid, 'hy') * WORLD };
-  }
-  // 愿望星：在自家主星周围散开，形成"星座"感。
-  // 半径要够大 —— 太小的话同一用户的几条愿望会在屏幕上叠成一团文字。
-  function posOf(wishId, uid) {
-    const home = homeOf(uid);
-    const ang = r01(wishId, 'a') * Math.PI * 2;
-    const rad = 130 + r01(wishId, 'r') * 470;
-    return { x: home.x + Math.cos(ang) * rad, y: home.y + Math.sin(ang) * rad };
-  }
-
-  /* ---------------- 数据 ---------------- */
+  /* ---------------- 数据 ----------------
+     坐标由服务端在写入时定好（Halton 低差异序列，均匀铺开），前端只做只读消费。
+     这样刷新、换设备、换网络，星星位置都完全一致。 */
   function setData(list, mineUid) {
     myUid = mineUid || null;
-    stars = list.map(w => {
-      const p = posOf(String(w.id), String(w.uid));
-      return { id: String(w.id), uid: String(w.uid), name: w.name || '', text: w.text, x: p.x, y: p.y };
-    });
-    // 初始把相机放在自己主星上（没登录则放世界中心）
-    if (myUid) {
-      const h = homeOf(myUid);
-      cam.x = h.x; cam.y = h.y;
+    stars = list.map(w => ({
+      id: String(w.id),
+      uid: String(w.uid),
+      name: w.name || '',
+      text: w.text,
+      x: w.x * WORLD,
+      y: w.y * WORLD,
+    }));
+
+    // 登录了就把相机放到自己的星上，没登录就停在正中
+    const mine = myUid ? stars.filter(s => s.uid === myUid) : [];
+    if (mine.length) {
+      cam.x = mine[0].x;
+      cam.y = mine[0].y;
+    } else {
+      cam.x = WORLD / 2;
+      cam.y = WORLD / 2;
     }
     draw();
+  }
+
+  // 从后端拉真实愿望。失败就保持空 —— 星海拉不到，不影响许愿。
+  let loading = false;
+  async function loadSea() {
+    if (loading || !window.WM?.api) return;
+    loading = true;
+    try {
+      const res = await fetch(WM.api.base + '/api/sea?limit=800', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      setData(data.wishes || [], WM.auth?.me?.id || null);
+    } catch (e) {
+      setData([], WM.auth?.me?.id || null);
+    } finally {
+      loading = false;
+    }
   }
 
   /* ---------------- 尺寸 ---------------- */
@@ -137,6 +135,7 @@ window.WM = window.WM || {};
 
     const showLabels = cam.k > LABEL_K;
     const fs = 12 / cam.k;                 // 文字在屏幕上恒定 12px
+    let mineLabels = 0;                    // 自己的标签也限量，否则传了几百条照样糊成一片
 
     for (const s of shown) {
       const isMine = s.uid === myUid;
@@ -163,7 +162,8 @@ window.WM = window.WM || {};
       ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, 6.2832); ctx.fill();
 
       // 文字
-      if (s.text && (isMine || showLabels)) {
+      const drawLabel = s.text && (isMine ? mineLabels++ < 40 : showLabels);
+      if (drawLabel) {
         ctx.globalCompositeOperation = 'source-over';
         ctx.font = `${fs}px "Songti SC","STSong","SimSun",serif`;
         ctx.textAlign = 'center';
@@ -320,38 +320,6 @@ window.WM = window.WM || {};
     }
   }
 
-  /* ---------------- 种子数据（Phase 3 换成真实数据） ---------------- */
-  function seed() {
-    const names = [
-      '小林', '阿泽', 'Nina', '老陈', '阿May', '十七', 'Leo', '小满', '阿禾', '沉舟',
-      '青栀', '白鹿', '阿橘', '木木', '山风', '阿棠', '雾岛', '柚子', '江晚', '拾光',
-      '半夏', '星河', '阿松', '南风', '迟迟', '小鹿', '云舟', '阿满', '朝暮', '长明',
-      'echo', '宁宁', '阿屿', '九月', '青禾', '望舒'
-    ];
-    const texts = [
-      '考研上岸', '家人平安健康', '自由自在', '攒够首付', '身体健康',
-      '遇见对的人', '事业顺利', '回到家乡', '学会游泳', '少熬夜',
-      '去一次冰岛', '和好如初', '写出自己的书', '开一家小店', '不再焦虑',
-      '陪爸妈旅行', '养一只猫', '把吉他学会', '升职加薪', '世界和平',
-      '看完一百本书', '早睡早起', '做喜欢的工作', '和朋友常联系',
-      '有个自己的家', '不再失眠', '学会说不', '种一棵树', '去看一次海', '慢一点也没关系'
-    ];
-    const out = [];
-    for (let u = 0; u < names.length; u++) {
-      const uid = 'u' + u;
-      const n = 3 + Math.floor(r01(uid, 'n') * 6);   // 每人 3–8 条
-      for (let i = 0; i < n; i++) {
-        const id = uid + '-w' + i;
-        out.push({
-          id,
-          uid,
-          name: names[u],
-          text: texts[Math.floor(r01(id, 'p') * texts.length)],
-        });
-      }
-    }
-    return out;
-  }
 
   /* ---------------- 切页入口：桌面鼠标用户没有横滑手势 ----------------
      触摸板双指横滑是原生滚动；鼠标用户靠点圆点和方向键。 */
@@ -374,9 +342,14 @@ window.WM = window.WM || {};
   pager.addEventListener('scroll', onScroll, { passive: true });
 
   resize();
-  setData(seed(), null);          // Phase 1：还没登录，没有"自己的星"
+  loadSea();                      // 拉真实愿望；库是空的星海就是空的
   onScroll();
   requestAnimationFrame(tick);
+
+  // 登录 / 退出 / 愿望有变动时重新拉一次
+  window.addEventListener('wm:login', () => loadSea());
+  window.addEventListener('wm:logout', () => loadSea());
+  window.addEventListener('wm:wishes-changed', () => loadSea());
 
   // 暴露给其他模块用
   WM.sea = {

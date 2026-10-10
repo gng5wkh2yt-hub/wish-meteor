@@ -524,4 +524,11 @@ renderStack(null);
 setTimeout(() => dock.classList.add('ready'), 1100);   // 入场淡入
 requestAnimationFrame(t => { last = t; requestAnimationFrame(frame); });
 
+/* ---------------- 给其他模块的接口 ---------------- */
+WM.wish = {
+  // 本地愿望（用于注册时批量汇入星海）
+  list: () => wishes.map(w => ({ id: w.id, text: w.text, ts: w.ts })),
+  count: () => wishes.length,
+};
+
 })();

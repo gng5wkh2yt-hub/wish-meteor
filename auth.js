@@ -156,6 +156,12 @@ window.WM = window.WM || {};
       }
 
       closeModal();
+
+      // 把本地已有的愿望汇入星海（失败不阻断，之后还能手动补传）
+      if (mode === 'register') {
+        uploadLocalWishes().catch(() => {});
+      }
+
       window.dispatchEvent(new CustomEvent('wm:login', { detail: me }));
 
     } catch (e) {
@@ -165,6 +171,19 @@ window.WM = window.WM || {};
       regSubmit.disabled = false;
       regSubmit.textContent = mode === 'register' ? '汇入' : '登录';
     }
+  }
+
+  /* ---------------- 把本地愿望汇入星海 ---------------- */
+  async function uploadLocalWishes() {
+    const list = (WM.wish && WM.wish.list && WM.wish.list()) || [];
+    if (!list.length) return { inserted: 0 };
+    const res = await WM.api.request('/api/wishes/bulk', {
+      method: 'POST',
+      auth: true,
+      body: { wishes: list },
+    });
+    window.dispatchEvent(new CustomEvent('wm:wishes-changed'));
+    return res;
   }
 
   /* ---------------- 头像上传 ---------------- */
