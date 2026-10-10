@@ -28,3 +28,10 @@ CREATE TABLE IF NOT EXISTS wishes (
 CREATE INDEX IF NOT EXISTS idx_wishes_user ON wishes(user_id);
 CREATE INDEX IF NOT EXISTS idx_wishes_ts   ON wishes(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_wishes_xy   ON wishes(x, y);   -- 视口矩形查询用
+
+-- 头像：存 base64（每张只有几 KB，不值得为它单独开通 R2）
+CREATE TABLE IF NOT EXISTS avatars (
+  key        TEXT PRIMARY KEY,   -- <userId>_<avatarVer>，换头像时 key 变化
+  data       TEXT NOT NULL,      -- base64
+  created_at INTEGER NOT NULL
+);

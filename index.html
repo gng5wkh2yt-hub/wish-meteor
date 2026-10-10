@@ -23,6 +23,11 @@
         <p>写下来 让它飞向夜空</p>
       </div>
 
+      <!-- 左侧竖条气泡：汇入愿海的入口。长按可缩小，但关不掉 -->
+      <button class="harbor" id="harbor" type="button" aria-label="汇入愿海">
+        <span class="hb-text" id="harborText">可汇入愿海</span>
+      </button>
+
       <div class="dock" id="dock">
         <div class="stack" id="stack" hidden>
           <div class="stack-body" id="stackBody"></div>
@@ -59,6 +64,41 @@
 <!-- 顶部圆点指示器 -->
 <div class="dots" id="dots"><i></i><i></i></div>
 
+<!-- 右上角头像（登录后出现） -->
+<div class="me" id="me" hidden>
+  <div class="me-avatar" id="meAvatar" title="点击退出"></div>
+</div>
+
+<!-- 注册 / 登录面板 -->
+<div class="modal" id="regModal" hidden>
+  <div class="modal-card">
+    <h2 id="regTitle">汇入愿海</h2>
+    <p class="mh-sub" id="regSub">取个名字，让你的愿望成为星海里的一颗星</p>
+
+    <div class="avatar-pick">
+      <div class="av-circle" id="avPreview"></div>
+      <label class="av-upload">
+        选择头像
+        <input type="file" id="avFile" accept="image/*" hidden>
+      </label>
+    </div>
+
+    <input id="regName" type="text" maxlength="16" placeholder="用户名" autocomplete="username">
+    <input id="regPass" type="password" maxlength="64" placeholder="密码" autocomplete="current-password">
+
+    <div class="modal-err" id="regErr"></div>
+
+    <div class="modal-actions">
+      <button id="regCancel" type="button">取消</button>
+      <button id="regSubmit" type="button">汇入</button>
+    </div>
+
+    <div class="modal-note" id="regNote">
+      注册后，你本地已有的愿望会一并汇入星海
+    </div>
+  </div>
+</div>
+
 <!-- 成功提示 -->
 <div class="bubble" id="bubble">
   <div class="b-main">许愿成功</div>
@@ -74,6 +114,7 @@
 
 <script src="api.js"></script>
 <script src="wish.js"></script>
+<script src="auth.js"></script>
 <script src="sea.js"></script>
 </body>
 </html>

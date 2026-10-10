@@ -1,15 +1,25 @@
 /**
- * 愿海后端 —— Phase 0 骨架
+ * 愿海后端 —— Cloudflare Worker
  *
- * /api/health  JSON 健康检查（诊断用）
- * /test        手机友好的自检页，打开就是大字结果
+ * 密码方案：浏览器跑 PBKDF2（昂贵），服务端只做一次 HMAC（便宜）。
+ * 这样规避 Workers 免费版 10ms CPU 限制 —— 10 万次 PBKDF2 会直接打爆它。
+ *
+ * 登录态：无状态签名 token，校验只验签不查库。
  */
 
 const CORS_ORIGINS = [
   'https://gng5wkh2yt-hub.github.io',
   'https://huiliyi.site',
   'https://www.huiliyi.site',
+  // 本地开发用（file:// 的 Origin 是 null，没法白名单，所以用 http server 预览）
+  'http://localhost:8765',
+  'http://127.0.0.1:8765',
 ];
+
+const TOKEN_TTL = 30 * 24 * 3600 * 1000;   // 30 天
+
+/* ============================ 基础工具 ============================ */
+const enc = new TextEncoder();
 
 function corsHeaders(origin) {
   const allow = CORS_ORIGINS.includes(origin) ? origin : CORS_ORIGINS[0];
@@ -17,7 +27,6 @@ function corsHeaders(origin) {
     'Access-Control-Allow-Origin': allow,
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    // 预检缓存一天。大陆到境外节点延迟高，这个能省掉一整个 RTT
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',
   };
@@ -34,148 +43,314 @@ function json(data, status = 200, origin = '') {
   });
 }
 
-const TEST_HTML = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#04050e">
-<title>愿海 · 连通性自检</title>
-<style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{
-    min-height:100vh;background:#04050e;
-    color:#eef2ff;
-    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Songti SC",sans-serif;
-    padding:32px 20px 60px;
-    background-image:radial-gradient(circle at 20% 20%,rgba(70,94,196,.16),transparent 55%),
-                     radial-gradient(circle at 85% 75%,rgba(148,84,190,.13),transparent 55%);
-  }
-  h1{font-size:17px;font-weight:400;letter-spacing:.3em;text-align:center;color:rgba(200,215,250,.7);margin-bottom:28px}
-  .card{
-    max-width:520px;margin:0 auto;
-    background:rgba(255,255,255,.06);
-    border:1px solid rgba(255,255,255,.14);
-    border-radius:22px;padding:22px 20px;
-    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
-    box-shadow:0 10px 40px rgba(0,0,0,.4);
-  }
-  .status{font-size:38px;text-align:center;margin-bottom:6px;line-height:1.2}
-  .status-sub{text-align:center;color:rgba(190,206,244,.6);font-size:13px;margin-bottom:22px}
-  .big{text-align:center;font-size:56px;font-weight:600;letter-spacing:.06em;
-       color:#ffd88a;text-shadow:0 0 34px rgba(255,200,110,.5);margin:10px 0 4px}
-  .big-label{text-align:center;font-size:12px;letter-spacing:.24em;color:rgba(190,206,244,.5);margin-bottom:24px}
-  .row{display:flex;justify-content:space-between;padding:11px 2px;font-size:14px;
-       border-top:1px solid rgba(255,255,255,.08)}
-  .row span:first-child{color:rgba(180,196,236,.65)}
-  .row span:last-child{font-variant-numeric:tabular-nums;color:#fff}
-  .hint{margin-top:20px;font-size:12px;line-height:1.7;color:rgba(170,186,226,.55);text-align:center}
-  .bad{color:#ff9a9a}
-  .good{color:#8ce0a8}
-</style>
-</head>
-<body>
-  <h1>愿 海 · 连 通 自 检</h1>
-  <div class="card">
-    <div class="status" id="status">…</div>
-    <div class="status-sub" id="sub">正在测试，请稍候</div>
-    <div class="big" id="median">--</div>
-    <div class="big-label">响 应 中 位 数</div>
-    <div id="rows"></div>
-    <div class="hint" id="hint"></div>
-  </div>
-<script>
-(async () => {
-  const status = document.getElementById('status');
-  const sub = document.getElementById('sub');
-  const med = document.getElementById('median');
-  const rowsEl = document.getElementById('rows');
-  const hint = document.getElementById('hint');
-  const samples = [];
-  let info = null, fails = 0;
+function toHex(buf) {
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
-  for (let i = 0; i < 6; i++) {
-    const t0 = performance.now();
-    try {
-      const r = await fetch('/api/health', { cache: 'no-store' });
-      const j = await r.json();
-      samples.push(Math.round(performance.now() - t0));
-      if (!info) info = j;
-    } catch (e) { fails++; }
-  }
+function b64urlEncode(str) {
+  return btoa(unescape(encodeURIComponent(str)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(s) {
+  s = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  return decodeURIComponent(escape(atob(s)));
+}
 
-  const ok = samples.length > 0;
-  status.textContent = ok ? '✅' : '❌';
-  status.className = 'status ' + (ok ? 'good' : 'bad');
-  sub.textContent = ok ? '后端可达' : '连不上后端';
+async function hmacHex(secret, message) {
+  const key = await crypto.subtle.importKey(
+    'raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  return toHex(await crypto.subtle.sign('HMAC', key, enc.encode(message)));
+}
 
-  if (ok) {
-    samples.sort((a, b) => a - b);
-    const median = samples[Math.floor(samples.length / 2)];
-    med.textContent = median + ' ms';
-    rowsEl.innerHTML = [
-      ['云端机房', info.colo || '?'],
-      ['出口国家', info.country || '?'],
-      ['数据库', info.db && info.db.ok ? '正常 · ' + info.db.ms + ' ms' : '异常'],
-      ['最快 / 最慢', samples[0] + ' / ' + samples[samples.length - 1] + ' ms'],
-      ['成功 / 失败', samples.length + ' / ' + fails],
-    ].map(([k, v]) => '<div class="row"><span>' + k + '</span><span>' + v + '</span></div>').join('');
-    hint.innerHTML = median < 600
-      ? '速度可以，星海能流畅用'
-      : (median < 1200 ? '偏慢但能用，前端会做缓存兜底' : '偏慢，可能要优化机房或加缓存');
-  } else {
-    med.textContent = '×';
-    rowsEl.innerHTML = '<div class="row"><span>失败次数</span><span>' + fails + '</span></div>';
-    hint.textContent = '请确认是用流量打开的，而不是 Wi-Fi。仍失败请把这一页截图给我。';
-  }
-})();
-<\/script>
-</body>
-</html>`;
+// 常数时间比较，避免用 === 泄露前缀信息
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
 
+function randomId(prefix) {
+  const b = crypto.getRandomValues(new Uint8Array(9));
+  return prefix + [...b].map(x => x.toString(36)).join('').slice(0, 12);
+}
+
+/* ============================ token ============================ */
+async function signToken(uid, secret) {
+  const payload = b64urlEncode(JSON.stringify({ uid, exp: Date.now() + TOKEN_TTL }));
+  const sig = await hmacHex(secret, payload);
+  return payload + '.' + sig;
+}
+
+async function verifyToken(token, secret) {
+  if (!token || typeof token !== 'string') return null;
+  const i = token.lastIndexOf('.');
+  if (i < 0) return null;
+  const payload = token.slice(0, i);
+  const sig = token.slice(i + 1);
+  const expect = await hmacHex(secret, payload);
+  if (!safeEqual(sig, expect)) return null;
+  try {
+    const data = JSON.parse(b64urlDecode(payload));
+    if (!data.uid || !data.exp || data.exp < Date.now()) return null;
+    return data;
+  } catch (e) { return null; }
+}
+
+async function authUser(request, env) {
+  const h = request.headers.get('Authorization') || '';
+  if (!h.startsWith('Bearer ')) return null;
+  const data = await verifyToken(h.slice(7), env.JWT_SECRET);
+  if (!data) return null;
+  const user = await env.DB.prepare(
+    'SELECT id, name, name_lower, avatar_key, avatar_ver, home_x, home_y, created_at FROM users WHERE id = ?'
+  ).bind(data.uid).first();
+  return user || null;
+}
+
+/* ============================ 校验 ============================ */
+function normalizeName(name) {
+  if (typeof name !== 'string') return null;
+  const n = name.trim();
+  if (n.length < 2 || n.length > 16) return null;
+  // 中文、字母、数字、下划线
+  if (!/^[一-龥A-Za-z0-9_]+$/.test(n)) return null;
+  return n;
+}
+
+function publicUser(u) {
+  return {
+    id: u.id,
+    name: u.name,
+    avatarUrl: u.avatar_key ? `/av/${u.avatar_key}` : null,
+    homeX: u.home_x,
+    homeY: u.home_y,
+  };
+}
+
+/* ============================ 路由 ============================ */
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const origin = request.headers.get('Origin') || '';
+    const path = url.pathname;
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
 
-    // 手机友好自检页
-    if (url.pathname === '/test') {
-      return new Response(TEST_HTML, {
-        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
-      });
-    }
-
-    if (url.pathname === '/api/health') {
-      // 顺带量一次 D1 往返，这样单个请求就能反映"Worker + 数据库"的端到端延迟
-      const t0 = Date.now();
-      let db = { ok: false, ms: null, wishes: null, users: null };
-      try {
-        const row = await env.DB
-          .prepare('SELECT (SELECT COUNT(*) FROM wishes) AS w, (SELECT COUNT(*) FROM users) AS u')
-          .first();
-        db = { ok: true, ms: Date.now() - t0, wishes: row?.w ?? 0, users: row?.u ?? 0 };
-      } catch (e) {
-        db = { ok: false, ms: Date.now() - t0, error: String(e && e.message || e) };
+    try {
+      /* ---------- 自检页 ---------- */
+      if (path === '/test') {
+        return new Response(TEST_HTML, {
+          headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+        });
       }
 
-      return json({
-        ok: true,
-        service: 'wish-meteor-api',
-        phase: 0,
-        ts: Date.now(),
-        // 请求实际落地的 Cloudflare 机房与出口国家 —— 诊断国内速度就看这个
-        colo: request.cf?.colo ?? null,
-        country: request.cf?.country ?? null,
-        city: request.cf?.city ?? null,
-        asn: request.cf?.asn ?? null,
-        db,
-      }, 200, origin);
-    }
+      /* ---------- 健康检查 ---------- */
+      if (path === '/api/health') {
+        const t0 = Date.now();
+        let db = { ok: false, ms: null };
+        try {
+          const row = await env.DB.prepare(
+            'SELECT (SELECT COUNT(*) FROM wishes) AS w, (SELECT COUNT(*) FROM users) AS u'
+          ).first();
+          db = { ok: true, ms: Date.now() - t0, wishes: row?.w ?? 0, users: row?.u ?? 0 };
+        } catch (e) {
+          db = { ok: false, ms: Date.now() - t0, error: String(e?.message || e) };
+        }
+        return json({
+          ok: true, service: 'wish-meteor-api',
+          colo: request.cf?.colo ?? null,
+          country: request.cf?.country ?? null,
+          db,
+        }, 200, origin);
+      }
 
-    return json({ error: 'not_found', path: url.pathname }, 404, origin);
+      /* ---------- 取盐（登录前） ---------- */
+      if (path === '/api/auth/salt' && request.method === 'GET') {
+        const name = normalizeName(url.searchParams.get('u'));
+        if (!name) return json({ error: 'bad_name' }, 400, origin);
+        const u = await env.DB.prepare(
+          'SELECT salt, iters FROM users WHERE name_lower = ?'
+        ).bind(name.toLowerCase()).first();
+        if (u) return json({ salt: u.salt, iters: u.iters }, 200, origin);
+        // 用户不存在也返回一个确定性的伪盐，避免通过响应差异枚举用户名
+        const fake = await hmacHex(env.PEPPER, 'salt:' + name.toLowerCase());
+        return json({ salt: fake.slice(0, 32), iters: 210000, exists: false }, 200, origin);
+      }
+
+      /* ---------- 注册 ---------- */
+      if (path === '/api/auth/register' && request.method === 'POST') {
+        const body = await request.json().catch(() => null);
+        const name = normalizeName(body?.name);
+        const authKey = typeof body?.authKey === 'string' ? body.authKey : '';
+        const salt = typeof body?.salt === 'string' ? body.salt : '';
+        const iters = Number(body?.iters) || 210000;
+        if (!name) return json({ error: '用户名需 2–16 位，仅限中英文、数字、下划线' }, 400, origin);
+        if (authKey.length < 32) return json({ error: 'bad_authkey' }, 400, origin);
+
+        const exists = await env.DB.prepare(
+          'SELECT id FROM users WHERE name_lower = ?'
+        ).bind(name.toLowerCase()).first();
+        if (exists) return json({ error: '这个名字已经有人用了' }, 409, origin);
+
+        const id = randomId('u');
+        const pwdHash = await hmacHex(env.PEPPER, authKey);
+        // 主星坐标：这一簇愿望在星海里的落点
+        const hx = (parseInt(await hmacHex(env.PEPPER, 'hx:' + id), 16) % 100000) / 100000;
+        const hy = (parseInt(await hmacHex(env.PEPPER, 'hy:' + id), 16) % 100000) / 100000;
+
+        await env.DB.prepare(
+          `INSERT INTO users (id, name, name_lower, salt, iters, pwd_hash, home_x, home_y, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(id, name, name.toLowerCase(), salt, iters, pwdHash, hx, hy, Date.now()).run();
+
+        const user = await env.DB.prepare(
+          'SELECT id, name, name_lower, avatar_key, avatar_ver, home_x, home_y, created_at FROM users WHERE id = ?'
+        ).bind(id).first();
+
+        return json({ token: await signToken(id, env.JWT_SECRET), user: publicUser(user) }, 200, origin);
+      }
+
+      /* ---------- 登录 ---------- */
+      if (path === '/api/auth/login' && request.method === 'POST') {
+        const body = await request.json().catch(() => null);
+        const name = normalizeName(body?.name);
+        const authKey = typeof body?.authKey === 'string' ? body.authKey : '';
+        if (!name || !authKey) return json({ error: 'bad_request' }, 400, origin);
+
+        const u = await env.DB.prepare('SELECT * FROM users WHERE name_lower = ?')
+          .bind(name.toLowerCase()).first();
+        if (!u) return json({ error: '用户名或密码不对' }, 401, origin);
+
+        const pwdHash = await hmacHex(env.PEPPER, authKey);
+        if (!safeEqual(pwdHash, u.pwd_hash)) {
+          return json({ error: '用户名或密码不对' }, 401, origin);
+        }
+
+        return json({ token: await signToken(u.id, env.JWT_SECRET), user: publicUser(u) }, 200, origin);
+      }
+
+      /* ---------- 当前用户 ---------- */
+      if (path === '/api/me' && request.method === 'GET') {
+        const me = await authUser(request, env);
+        if (!me) return json({ error: 'unauthorized' }, 401, origin);
+        const c = await env.DB.prepare('SELECT COUNT(*) AS n FROM wishes WHERE user_id = ?')
+          .bind(me.id).first();
+        return json({ user: publicUser(me), wishCount: c?.n ?? 0 }, 200, origin);
+      }
+
+      /* ---------- 头像上传 ---------- */
+      if (path === '/api/avatar' && request.method === 'POST') {
+        const me = await authUser(request, env);
+        if (!me) return json({ error: 'unauthorized' }, 401, origin);
+
+        const buf = await request.arrayBuffer();
+        if (!buf.byteLength || buf.byteLength > 64 * 1024) {
+          return json({ error: '头像需小于 64KB' }, 413, origin);
+        }
+        // 校验确实是图片（webp: RIFF....WEBP / jpeg: FFD8FF / png: 89504E47）
+        const b = new Uint8Array(buf.slice(0, 12));
+        const isWebp = b[0] === 0x52 && b[1] === 0x49 && b[8] === 0x57 && b[9] === 0x45;
+        const isJpg = b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF;
+        const isPng = b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47;
+        if (!isWebp && !isJpg && !isPng) return json({ error: '不是有效的图片' }, 400, origin);
+
+        const ext = isWebp ? 'webp' : isJpg ? 'jpg' : 'png';
+        const ver = (me.avatar_ver || 0) + 1;
+        const key = `${me.id}_${ver}.${ext}`;
+        // 存 base64（头像只有几 KB，不值得为它开通 R2）
+        let bin = '';
+        const bytes = new Uint8Array(buf);
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        const b64 = btoa(bin);
+
+        await env.DB.prepare('UPDATE users SET avatar_key = ?, avatar_ver = ? WHERE id = ?')
+          .bind(key, ver, me.id).run();
+        await env.DB.prepare(
+          'INSERT OR REPLACE INTO avatars (key, data, created_at) VALUES (?, ?, ?)'
+        ).bind(key, b64, Date.now()).run();
+
+        return json({ avatarUrl: `/av/${key}`, avatarVer: ver }, 200, origin);
+      }
+
+      /* ---------- 取头像 ---------- */
+      if (path.startsWith('/av/') && request.method === 'GET') {
+        const key = path.slice(4);
+        const row = await env.DB.prepare('SELECT data FROM avatars WHERE key = ?').bind(key).first();
+        if (!row) return new Response('not found', { status: 404, headers: corsHeaders(origin) });
+        const bin = atob(row.data);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        // 按实际格式回，别硬编码 —— 前端回退到 jpeg 时标成 webp 会解析错
+        const mime = key.endsWith('.jpg') ? 'image/jpeg'
+                   : key.endsWith('.png') ? 'image/png'
+                   : 'image/webp';
+        return new Response(bytes, {
+          headers: {
+            'content-type': mime,
+            // 文件名带版本号，换头像时 URL 变化，可以放心长缓存
+            'cache-control': 'public, max-age=31536000, immutable',
+            ...corsHeaders(origin),
+          },
+        });
+      }
+
+      return json({ error: 'not_found', path }, 404, origin);
+    } catch (e) {
+      return json({ error: 'server_error', detail: String(e?.message || e) }, 500, origin);
+    }
   },
 };
+
+/* ============================ 自检页 ============================ */
+const TEST_HTML = `<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>愿海 · 自检</title>
+<style>
+body{min-height:100vh;background:#04050e;color:#eef2ff;margin:0;padding:28px 18px;
+font-family:-apple-system,"PingFang SC",sans-serif}
+.card{max-width:520px;margin:0 auto;background:rgba(255,255,255,.06);
+border:1px solid rgba(255,255,255,.14);border-radius:22px;padding:22px 20px}
+.big{text-align:center;font-size:52px;font-weight:600;color:#ffd88a;margin:8px 0}
+.lbl{text-align:center;font-size:12px;letter-spacing:.24em;color:rgba(190,206,244,.5);margin-bottom:20px}
+.row{display:flex;justify-content:space-between;padding:10px 2px;font-size:14px;
+border-top:1px solid rgba(255,255,255,.08)}
+.row span:first-child{color:rgba(180,196,236,.65)}
+</style></head><body>
+<div class="card">
+  <div class="big" id="med">--</div>
+  <div class="lbl">响 应 中 位 数</div>
+  <div id="rows"></div>
+</div>
+<script>
+(async () => {
+  const s = [];
+  let info = null, fails = 0;
+  for (let i = 0; i < 6; i++) {
+    const t0 = performance.now();
+    try {
+      const r = await fetch('/api/health', { cache: 'no-store' });
+      const j = await r.json();
+      s.push(Math.round(performance.now() - t0));
+      if (!info) info = j;
+    } catch (e) { fails++; }
+  }
+  if (!s.length) { document.getElementById('med').textContent = '×'; return; }
+  s.sort((a, b) => a - b);
+  const m = s[Math.floor(s.length / 2)];
+  document.getElementById('med').textContent = m + ' ms';
+  document.getElementById('rows').innerHTML = [
+    ['云端机房', info.colo || '?'],
+    ['出口国家', info.country || '?'],
+    ['数据库', info.db?.ok ? '正常 · ' + info.db.ms + ' ms' : '异常'],
+    ['愿望总数', info.db?.wishes ?? '?'],
+    ['注册用户', info.db?.users ?? '?'],
+    ['成功 / 失败', s.length + ' / ' + fails],
+  ].map(([k, v]) => '<div class="row"><span>' + k + '</span><span>' + v + '</span></div>').join('');
+})();
+<\/script></body></html>`;

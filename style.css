@@ -453,3 +453,182 @@ input{-webkit-user-select:text;user-select:text}
   color:rgba(170,190,235,.34);
   pointer-events:none;
 }
+
+/* ============================================================
+   左侧竖条气泡 —— 汇入愿海的入口
+   ============================================================ */
+.harbor{
+  position:absolute;
+  left:calc(env(safe-area-inset-left,0px) + 14px);
+  top:50%;transform:translateY(-50%);
+  z-index:7;
+  display:flex;align-items:center;justify-content:center;
+  padding:18px 11px;
+  border-radius:22px;
+  border:1px solid rgba(255,255,255,.17);
+  background:linear-gradient(148deg,
+    rgba(255,255,255,.17) 0%, rgba(255,255,255,.055) 44%, rgba(255,255,255,.11) 100%);
+  -webkit-backdrop-filter:blur(22px) saturate(185%);
+  backdrop-filter:blur(22px) saturate(185%);
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,.5),
+    0 10px 34px rgba(0,0,0,.36),
+    0 0 46px rgba(150,190,255,.07);
+  cursor:pointer;
+  transition:transform .45s cubic-bezier(.2,.9,.3,1),
+             padding .45s cubic-bezier(.2,.9,.3,1),
+             border-radius .45s, box-shadow .4s, opacity .4s;
+}
+.harbor:hover{box-shadow:inset 0 1px 1px rgba(255,255,255,.6),0 14px 40px rgba(0,0,0,.42),0 0 60px rgba(255,210,140,.14)}
+.hb-text{
+  writing-mode:vertical-rl;          /* 竖排 */
+  font-size:13px;letter-spacing:.24em;
+  color:rgba(255,250,240,.9);
+  text-shadow:0 0 16px rgba(255,228,170,.4);
+  white-space:nowrap;
+  transition:opacity .3s;
+}
+/* 长按后缩小成一颗小圆点 —— 但不能关闭 */
+.harbor.mini{
+  padding:12px;border-radius:50%;
+}
+.harbor.mini .hb-text{opacity:0;width:0;overflow:hidden}
+.harbor.mini::after{
+  content:'✦';font-size:15px;line-height:1;
+  color:rgba(255,240,210,.9);
+  text-shadow:0 0 14px rgba(255,214,140,.7);
+}
+
+/* ============================================================
+   右上角头像
+   ============================================================ */
+.me{
+  position:fixed;
+  right:16px;
+  top:calc(env(safe-area-inset-top,0px) + 12px);
+  z-index:9;
+}
+.me[hidden]{display:none}
+.me-avatar{
+  width:38px;height:38px;border-radius:50%;
+  background:#000;                    /* 默认纯黑 */
+  border:1.5px solid rgba(255,255,255,.28);
+  box-shadow:0 4px 18px rgba(0,0,0,.5),0 0 22px rgba(255,214,140,.14);
+  background-size:cover;background-position:center;
+  cursor:pointer;
+  transition:transform .25s,box-shadow .3s;
+}
+.me-avatar:hover{transform:scale(1.06);box-shadow:0 6px 22px rgba(0,0,0,.55),0 0 30px rgba(255,214,140,.3)}
+
+/* ============================================================
+   注册面板
+   ============================================================ */
+.modal{
+  position:fixed;inset:0;z-index:20;
+  display:flex;align-items:center;justify-content:center;
+  padding:20px;
+  background:rgba(3,4,12,.66);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  opacity:0;pointer-events:none;
+  transition:opacity .32s;
+}
+.modal.show{opacity:1;pointer-events:auto}
+.modal[hidden]{display:none}
+
+.modal-card{
+  width:min(400px,100%);
+  max-height:90vh;overflow-y:auto;
+  padding:26px 24px 22px;
+  border-radius:26px;
+  border:1px solid rgba(255,255,255,.16);
+  background:linear-gradient(158deg,rgba(24,26,48,.92),rgba(14,16,34,.94));
+  -webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);
+  box-shadow:0 26px 80px rgba(0,0,0,.6),0 0 80px rgba(120,150,255,.08);
+  transform:translateY(14px) scale(.97);
+  transition:transform .36s cubic-bezier(.2,.9,.3,1.1);
+}
+.modal.show .modal-card{transform:none}
+
+.modal-card h2{
+  font-size:19px;font-weight:400;letter-spacing:.24em;
+  color:rgba(255,248,235,.95);text-align:center;margin-bottom:6px;
+}
+.mh-sub{
+  font-size:12px;letter-spacing:.08em;text-align:center;
+  color:rgba(180,198,240,.5);margin-bottom:22px;
+}
+
+.avatar-pick{display:flex;flex-direction:column;align-items:center;gap:10px;margin-bottom:20px}
+.av-circle{
+  width:74px;height:74px;border-radius:50%;
+  background:#000;                     /* 默认纯黑 */
+  border:1.5px solid rgba(255,255,255,.24);
+  background-size:cover;background-position:center;
+  box-shadow:0 6px 24px rgba(0,0,0,.5),0 0 30px rgba(255,214,140,.12);
+}
+.av-upload{
+  font-size:12px;letter-spacing:.14em;
+  color:rgba(200,216,255,.66);
+  padding:7px 16px;border-radius:999px;
+  border:1px solid rgba(255,255,255,.16);
+  background:rgba(255,255,255,.05);
+  cursor:pointer;transition:color .3s,border-color .3s,background .3s;
+}
+.av-upload:hover{color:#fff;border-color:rgba(255,224,162,.4);background:rgba(255,255,255,.09)}
+
+.modal-card input[type=text],
+.modal-card input[type=password]{
+  width:100%;height:48px;padding:0 18px;margin-bottom:11px;
+  border-radius:14px;
+  border:1px solid rgba(188,208,255,.18);
+  background:rgba(255,255,255,.055);
+  color:rgba(255,249,236,.97);
+  font-family:inherit;font-size:15px;letter-spacing:.05em;
+  outline:none;
+  transition:border-color .35s,box-shadow .35s;
+}
+.modal-card input:focus{
+  border-color:rgba(255,224,162,.45);
+  box-shadow:0 0 0 3px rgba(255,214,132,.09);
+}
+.modal-card input::placeholder{color:rgba(178,194,236,.4);letter-spacing:.12em}
+
+.modal-err{
+  min-height:18px;font-size:12px;letter-spacing:.06em;
+  color:#ff9a9a;text-align:center;margin:4px 0 10px;
+}
+
+.modal-actions{display:flex;gap:11px}
+.modal-actions button{
+  flex:1;height:48px;border-radius:14px;
+  font-family:inherit;font-size:15px;letter-spacing:.2em;text-indent:.2em;
+  cursor:pointer;transition:transform .2s,box-shadow .3s,opacity .3s;
+}
+#regCancel{
+  border:1px solid rgba(255,255,255,.15);
+  background:rgba(255,255,255,.05);
+  color:rgba(214,226,255,.8);
+}
+#regSubmit{
+  border:1px solid rgba(255,226,168,.42);
+  background:linear-gradient(140deg,rgba(255,238,200,.22),rgba(255,196,112,.14));
+  color:#fff5de;
+  box-shadow:0 0 26px rgba(255,196,112,.16),inset 0 1px 0 rgba(255,255,255,.16);
+}
+#regSubmit:active,#regCancel:active{transform:scale(.97)}
+#regSubmit:disabled{opacity:.5;cursor:default}
+
+.modal-note{
+  margin-top:14px;font-size:11px;line-height:1.7;
+  color:rgba(170,186,226,.45);text-align:center;
+}
+
+/* 窄屏：气泡贴着左边缘更小一点 */
+@media (max-width:390px){
+  .harbor{left:calc(env(safe-area-inset-left,0px) + 9px);padding:14px 9px}
+  .hb-text{font-size:12px;letter-spacing:.18em}
+}
+@media (max-height:600px){
+  .harbor{padding:12px 8px}
+  .hb-text{font-size:11px}
+}
