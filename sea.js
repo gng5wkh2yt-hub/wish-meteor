@@ -175,23 +175,33 @@ window.WM = window.WM || {};
         ctx.font = `500 ${fs}px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",-apple-system,sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        // shadowBlur 是设备像素、不受 canvas 变换影响 —— 千万不能除以 cam.k，
-        // 否则缩小几百倍时阴影半径也放大几百倍，字就糊成一团光了
+        // shadowBlur 是设备像素、不受 canvas 变换影响。
+        // 既不能除以 cam.k（缩小时会放大成光团），也不能设太大 ——
+        // 屏幕字号恒定 12px，阴影超过 4px 就把字自己吞了，放大时尤其糊。
         if (isMine) {
-          ctx.shadowColor = 'rgba(255,214,140,0.85)';
-          ctx.shadowBlur = 9;
+          ctx.shadowColor = 'rgba(255,206,120,0.9)';
+          ctx.shadowBlur = 3.5;
           ctx.fillStyle = 'rgba(255,248,228,1)';
         } else if (isHit) {
-          ctx.shadowColor = 'rgba(120,240,255,0.8)';
-          ctx.shadowBlur = 8;
-          ctx.fillStyle = 'rgba(226,255,252,0.96)';
+          ctx.shadowColor = 'rgba(90,235,255,0.9)';
+          ctx.shadowBlur = 3.5;
+          ctx.fillStyle = 'rgba(232,255,254,0.98)';
         } else {
-          // 深色描边压住背景，比高斯阴影更锐利、更清楚
-          ctx.shadowColor = 'rgba(0,0,0,0.9)';
-          ctx.shadowBlur = 4;
-          ctx.fillStyle = 'rgba(222,234,255,0.86)';
+          ctx.shadowColor = 'rgba(0,0,0,0.95)';
+          ctx.shadowBlur = 3;
+          ctx.fillStyle = 'rgba(228,238,255,0.9)';
         }
-        ctx.fillText(s.text, s.x, s.y + r + 11 / cam.k);
+        ctx.fillText(s.text, s.x, s.y + r + 17 / cam.k);
+
+        // 愿望底下跟上 @用户名
+        if (s.name) {
+          ctx.font = `400 ${fs * 0.82}px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",-apple-system,sans-serif`;
+          if (isMine) ctx.fillStyle = 'rgba(255,224,164,0.72)';
+          else if (isHit) ctx.fillStyle = 'rgba(168,246,255,0.78)';
+          else ctx.fillStyle = 'rgba(186,206,242,0.5)';
+          ctx.fillText('@' + s.name, s.x, s.y + r + (17 + fs * 1.05) / cam.k);
+        }
+
         ctx.shadowBlur = 0;
         ctx.globalCompositeOperation = 'lighter';
       }
