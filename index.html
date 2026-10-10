@@ -47,7 +47,7 @@ input{-webkit-user-select:text;user-select:text}
   /* 用 left/right + auto margin 居中，把 transform 完全让给动画，
      否则抖动动画一旦覆盖 transform，容器就会横移出屏 */
   left:0;right:0;margin-inline:auto;
-  bottom:calc(env(safe-area-inset-bottom,0px) + 6vh);
+  bottom:calc(env(safe-area-inset-bottom,0px) + max(6vh,76px));
   width:min(620px,calc(100vw - 32px));
   display:flex;flex-direction:column;gap:16px;
   z-index:6;
@@ -319,7 +319,27 @@ input{-webkit-user-select:text;user-select:text}
   letter-spacing:.36em;text-indent:.36em;color:#9d7742;white-space:nowrap;
 }
 
+/* ---------- 右下角署名 ---------- */
+.credit{
+  position:fixed;
+  right:18px;
+  bottom:calc(env(safe-area-inset-bottom,0px) + 15px);
+  z-index:5;
+  text-align:right;
+  font-size:11px;line-height:1.62;letter-spacing:.06em;
+  color:rgba(168,188,234,.36);
+  text-shadow:0 1px 10px rgba(0,0,0,.65);
+  -webkit-user-select:text;user-select:text;
+}
+.credit .cr-title{
+  color:rgba(198,216,252,.5);
+  letter-spacing:.22em;
+}
+
 /* ---------- 窄屏：别让「放飞」被挤扁 ---------- */
+@media (max-width:600px){
+  .credit{right:13px;bottom:calc(env(safe-area-inset-bottom,0px) + 9px);font-size:10px;line-height:1.5}
+}
 @media (max-width:390px){
   .wishbar{gap:9px}
   .wishbar input{padding:0 17px;font-size:15px}
@@ -337,8 +357,8 @@ input{-webkit-user-select:text;user-select:text}
 @media (max-height:600px){
   .brand{top:calc(env(safe-area-inset-top,0px) + 5vh)}
   .brand p{display:none}
-  .dock{bottom:calc(env(safe-area-inset-bottom,0px) + 3.5vh)}
   .stack.open .stack-body{max-height:34vh}
+  .credit{right:11px;bottom:calc(env(safe-area-inset-bottom,0px) + 5px);font-size:9px;line-height:1.4}
 }
 @media (max-height:420px){
   .stack.open .stack-body{max-height:28vh}
@@ -377,6 +397,12 @@ input{-webkit-user-select:text;user-select:text}
 <div class="bubble" id="bubble">
   <div class="b-main">许愿成功</div>
   <div class="b-sub">所愿皆所成</div>
+</div>
+
+<div class="credit" id="credit">
+  <div class="cr-title">开发者</div>
+  <div>微信 @chenhanrun1116</div>
+  <div>抖音 @asnwbct</div>
 </div>
 
 <script>
@@ -876,7 +902,7 @@ input.addEventListener('keydown', e => {
 window.addEventListener('resize', resize);
 
 /* ---- 长按星空背景：流星增多、加速 ---- */
-const UI_SEL = 'input, button, .wish-bubble, .stack, .bubble';
+const UI_SEL = 'input, button, .wish-bubble, .stack, .bubble, .credit';
 function stormPress(e) {
   if (e.target && e.target.closest && e.target.closest(UI_SEL)) return;
   stormTarget = 1;
