@@ -77,6 +77,29 @@ function randomId(prefix) {
   return prefix + [...b].map(x => x.toString(36)).join('').slice(0, 12);
 }
 
+/* ---------------- 简易限流 ----------------
+   免费版没有 Rate Limiting 绑定，用一张轻量表按 IP + 分钟窗口计数。
+   注册接口最需要它 —— 没有的话任何脚本都能一分钟灌几百个账号。 */
+async function rateOk(env, ip, limit) {
+  if (!ip) return true;                       // 拿不到 IP 就不拦，别误伤
+  const win = Math.floor(Date.now() / 60000);
+  const row = await env.DB.prepare(
+    'SELECT hits FROM rate WHERE ip = ? AND window = ?'
+  ).bind(ip, win).first();
+  if ((row && row.hits) >= limit) return false;
+
+  await env.DB.prepare(
+    'INSERT INTO rate (ip, window, hits) VALUES (?, ?, 1) ' +
+    'ON CONFLICT(ip, window) DO UPDATE SET hits = hits + 1'
+  ).bind(ip, win).run();
+
+  // 顺手清掉一小时前的窗口，表不会无限涨
+  if (Math.random() < 0.02) {
+    await env.DB.prepare('DELETE FROM rate WHERE window < ?').bind(win - 60).run();
+  }
+  return true;
+}
+
 /* ---------------- 星星坐标：Halton 低差异序列 ----------------
    真随机会出现肉眼可见的聚集和空洞；Halton 按序号铺点，视觉上均匀得多，
    而且坐标只跟 rowid 有关 —— 删掉几颗星，其余的一颗都不会挪位。 */
@@ -127,7 +150,7 @@ async function authUser(request, env) {
   const data = await verifyToken(h.slice(7), env.JWT_SECRET);
   if (!data) return null;
   const user = await env.DB.prepare(
-    'SELECT id, name, name_lower, avatar_key, avatar_ver, home_x, home_y, created_at FROM users WHERE id = ?'
+    'SELECT id, name, name_lower, avatar_key, avatar_ver, created_at FROM users WHERE id = ?'
   ).bind(data.uid).first();
   return user || null;
 }
@@ -147,8 +170,6 @@ function publicUser(u) {
     id: u.id,
     name: u.name,
     avatarUrl: u.avatar_key ? `/av/${u.avatar_key}` : null,
-    homeX: u.home_x,
-    homeY: u.home_y,
   };
 }
 
@@ -199,13 +220,20 @@ export default {
           'SELECT salt, iters FROM users WHERE name_lower = ?'
         ).bind(name.toLowerCase()).first();
         if (u) return json({ salt: u.salt, iters: u.iters }, 200, origin);
-        // 用户不存在也返回一个确定性的伪盐，避免通过响应差异枚举用户名
+        // 用户不存在也返回一个确定性的伪 salt。
+        // 这里绝不能多带任何字段 —— 之前我加了 exists:false，等于把
+        // "这个名字没被注册" 直接写在响应里，前面整套伪盐防御全废。
+        // 两条响应的字段必须逐字一致，只有 salt 值不同。
         const fake = await hmacHex(env.PEPPER, 'salt:' + name.toLowerCase());
-        return json({ salt: fake.slice(0, 32), iters: 210000, exists: false }, 200, origin);
+        return json({ salt: fake.slice(0, 32), iters: 210000 }, 200, origin);
       }
 
       /* ---------- 注册 ---------- */
       if (path === '/api/auth/register' && request.method === 'POST') {
+        const ip = request.headers.get('cf-connecting-ip') || '';
+        if (!(await rateOk(env, ip, 5))) {
+          return json({ error: '操作太频繁了，过一分钟再试' }, 429, origin);
+        }
         const body = await request.json().catch(() => null);
         const name = normalizeName(body?.name);
         const authKey = typeof body?.authKey === 'string' ? body.authKey : '';
@@ -221,17 +249,14 @@ export default {
 
         const id = randomId('u');
         const pwdHash = await hmacHex(env.PEPPER, authKey);
-        // 主星坐标：这一簇愿望在星海里的落点
-        const hx = (parseInt(await hmacHex(env.PEPPER, 'hx:' + id), 16) % 100000) / 100000;
-        const hy = (parseInt(await hmacHex(env.PEPPER, 'hy:' + id), 16) % 100000) / 100000;
 
         await env.DB.prepare(
-          `INSERT INTO users (id, name, name_lower, salt, iters, pwd_hash, home_x, home_y, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(id, name, name.toLowerCase(), salt, iters, pwdHash, hx, hy, Date.now()).run();
+          `INSERT INTO users (id, name, name_lower, salt, iters, pwd_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).bind(id, name, name.toLowerCase(), salt, iters, pwdHash, Date.now()).run();
 
         const user = await env.DB.prepare(
-          'SELECT id, name, name_lower, avatar_key, avatar_ver, home_x, home_y, created_at FROM users WHERE id = ?'
+          'SELECT id, name, name_lower, avatar_key, avatar_ver, created_at FROM users WHERE id = ?'
         ).bind(id).first();
 
         return json({ token: await signToken(id, env.JWT_SECRET), user: publicUser(user) }, 200, origin);
@@ -239,6 +264,10 @@ export default {
 
       /* ---------- 登录 ---------- */
       if (path === '/api/auth/login' && request.method === 'POST') {
+        const ip = request.headers.get('cf-connecting-ip') || '';
+        if (!(await rateOk(env, ip, 10))) {
+          return json({ error: '尝试太频繁了，过一分钟再试' }, 429, origin);
+        }
         const body = await request.json().catch(() => null);
         const name = normalizeName(body?.name);
         const authKey = typeof body?.authKey === 'string' ? body.authKey : '';
@@ -332,9 +361,13 @@ export default {
         ).bind(limit).all();
 
         const me = await authUser(request, env).catch(() => null);
+        // total 必须是真总数。之前直接拿本页条数当 total，limit=1 时它返回 1，
+        // 名字骗人 —— 前端一旦拿它做分页或显示"共 N 颗星"就会错。
+        const cnt = await env.DB.prepare('SELECT COUNT(*) AS n FROM wishes').first();
 
         return json({
-          total: rows.results?.length || 0,
+          total: cnt?.n ?? 0,
+          returned: rows.results?.length || 0,
           mine: me ? me.id : null,
           wishes: (rows.results || []).map(r => ({
             id: r.id,
